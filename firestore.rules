@@ -1,0 +1,426 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: Default-Deny Catch-All
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Global Hardened Primitives
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        (request.auth.token.email == 'kclark@mpsk12.org' && request.auth.token.email_verified == true) ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function areTeacherSchedulesLocked() {
+      return exists(/databases/$(database)/documents/schools/milford_grade_school/config/governance)
+        && get(/databases/$(database)/documents/schools/milford_grade_school/config/governance).data.lockTeacherSchedules == true;
+    }
+
+    function areCurriculumUploadsLocked() {
+      return exists(/databases/$(database)/documents/schools/milford_grade_school/config/governance)
+        && get(/databases/$(database)/documents/schools/milford_grade_school/config/governance).data.lockCurriculumUploads == true;
+    }
+
+    function isValidDateStr(d) {
+      return d is string && d.size() == 10 && d.matches('^\\d{4}-\\d{2}-\\d{2}$');
+    }
+
+    function isValidGrade(g) {
+      return g in ['K', '1', '2', '3', '4', '5'];
+    }
+
+    function isValidTheme(t) {
+      return t in ['navy', 'teal', 'indigo', 'plum', 'slate'];
+    }
+
+    // Admin & School Governance Validators
+    function isValidAdminUser(data, adminUid) {
+      return data.keys().hasAll(['uid', 'label', 'grantedBy', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'label', 'grantedBy', 'createdAt'])
+        && isValidId(data.uid)
+        && data.uid == adminUid
+        && data.label is string && data.label.size() >= 1 && data.label.size() <= 80
+        && data.grantedBy is string && data.grantedBy == request.auth.uid
+        && data.createdAt is timestamp
+        && data.createdAt == request.time;
+    }
+
+    function isValidSchoolGovernance(data, schoolId) {
+      return data.keys().hasAll(['schoolId', 'schoolName', 'lockTeacherSchedules', 'lockCurriculumUploads', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['schoolId', 'schoolName', 'lockTeacherSchedules', 'lockCurriculumUploads', 'updatedBy', 'updatedAt'])
+        && data.schoolId == 'milford_grade_school'
+        && data.schoolId == schoolId
+        && data.schoolName is string && data.schoolName.size() >= 1 && data.schoolName.size() <= 120
+        && data.lockTeacherSchedules is bool
+        && data.lockCurriculumUploads is bool
+        && data.updatedBy is string && data.updatedBy == request.auth.uid
+        && data.updatedAt is timestamp
+        && data.updatedAt == request.time;
+    }
+
+    function isValidMasterScheduleBlock(data, schoolId) {
+      return data.keys().hasAll(['schoolId', 'grade', 'subjectId', 'name', 'timeLabel', 'defaultTheme', 'visible', 'order', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['schoolId', 'grade', 'subjectId', 'name', 'timeLabel', 'defaultTheme', 'visible', 'order', 'updatedBy', 'updatedAt'])
+        && data.schoolId == 'milford_grade_school'
+        && data.schoolId == schoolId
+        && isValidGrade(data.grade)
+        && isValidId(data.subjectId)
+        && data.subjectId.size() <= 64
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 80
+        && data.timeLabel is string && data.timeLabel.size() <= 40
+        && isValidTheme(data.defaultTheme)
+        && data.visible is bool
+        && (data.order is int || data.order is float)
+        && data.order >= 0 && data.order <= 100
+        && data.updatedBy is string && data.updatedBy == request.auth.uid
+        && data.updatedAt is timestamp
+        && data.updatedAt == request.time;
+    }
+
+    function isValidMasterNonSchoolDay(data, schoolId) {
+      return data.keys().hasAll(['schoolId', 'date', 'label', 'updatedBy', 'createdAt'])
+        && data.keys().hasOnly(['schoolId', 'date', 'label', 'updatedBy', 'createdAt'])
+        && data.schoolId == 'milford_grade_school'
+        && data.schoolId == schoolId
+        && isValidDateStr(data.date)
+        && data.label is string && data.label.size() >= 1 && data.label.size() <= 120
+        && data.updatedBy is string && data.updatedBy == request.auth.uid
+        && data.createdAt is timestamp
+        && data.createdAt == request.time;
+    }
+
+    function isValidMasterLesson(data, schoolId) {
+      return data.keys().hasAll(['schoolId', 'grade', 'subjectId', 'date', 'unitTitle', 'lessonTitle', 'notes', 'updatedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'schoolId', 'grade', 'subjectId', 'date', 'unitTitle', 'lessonTitle',
+          'bullets', 'standards', 'externalUrl', 'prepFlag',
+          'unitResourcesLabel', 'unitResourcesUrl', 'slidesUrl',
+          'notes', 'themeOverride', 'updatedBy', 'createdAt', 'updatedAt'
+        ])
+        && data.schoolId == 'milford_grade_school'
+        && data.schoolId == schoolId
+        && isValidGrade(data.grade)
+        && isValidId(data.subjectId)
+        && data.subjectId.size() <= 64
+        && isValidDateStr(data.date)
+        && data.unitTitle is string && data.unitTitle.size() >= 1 && data.unitTitle.size() <= 140
+        && data.lessonTitle is string && data.lessonTitle.size() >= 1 && data.lessonTitle.size() <= 180
+        && data.notes is string && data.notes.size() <= 2000
+        && (!('bullets' in data) || (
+          data.bullets is list
+          && data.bullets.size() <= 10
+          && (data.bullets.size() == 0 || (data.bullets[0] is string && data.bullets[0].size() <= 200))
+        ))
+        && (!('standards' in data) || (data.standards is string && data.standards.size() <= 160))
+        && (!('externalUrl' in data) || (data.externalUrl is string && data.externalUrl.size() <= 500))
+        && (!('prepFlag' in data) || data.prepFlag is bool)
+        && (!('unitResourcesLabel' in data) || (data.unitResourcesLabel is string && data.unitResourcesLabel.size() <= 60))
+        && (!('unitResourcesUrl' in data) || (data.unitResourcesUrl is string && data.unitResourcesUrl.size() <= 500))
+        && (!('slidesUrl' in data) || (data.slidesUrl is string && data.slidesUrl.size() <= 500))
+        && (!('themeOverride' in data) || isValidTheme(data.themeOverride))
+        && data.updatedBy is string && data.updatedBy == request.auth.uid
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.updatedAt == request.time;
+    }
+
+    // Teacher Entity Validators
+    function isValidPrivateAccount(data, userId) {
+      return data.keys().hasAll(['ownerId', 'email', 'createdAt'])
+        && data.keys().hasOnly(['ownerId', 'email', 'createdAt'])
+        && data.ownerId is string
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && data.email is string
+        && data.email.size() >= 3
+        && data.email.size() <= 254
+        && data.createdAt is timestamp
+        && data.createdAt == request.time;
+    }
+
+    function isValidWorkspaceSettings(data, userId) {
+      return data.keys().hasAll(['ownerId', 'name', 'school', 'room', 'subNotes', 'roleMode', 'seeded', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'name', 'school', 'room', 'subNotes', 'roleMode', 'seeded', 'updatedAt'])
+        && data.ownerId is string
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 80
+        && data.school is string && data.school.size() <= 120
+        && data.room is string && data.room.size() <= 40
+        && data.subNotes is string && data.subNotes.size() <= 2000
+        && data.roleMode in ['editor', 'viewer']
+        && data.seeded is bool
+        && data.updatedAt is timestamp
+        && data.updatedAt == request.time;
+    }
+
+    function isValidScheduleBlock(data, userId) {
+      return data.keys().hasAll(['ownerId', 'grade', 'subjectId', 'name', 'timeLabel', 'defaultTheme', 'visible', 'order', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'grade', 'subjectId', 'name', 'timeLabel', 'defaultTheme', 'visible', 'order', 'updatedAt'])
+        && data.ownerId is string
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && isValidGrade(data.grade)
+        && isValidId(data.subjectId)
+        && data.subjectId.size() <= 64
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 80
+        && data.timeLabel is string && data.timeLabel.size() <= 40
+        && isValidTheme(data.defaultTheme)
+        && data.visible is bool
+        && (data.order is int || data.order is float)
+        && data.order >= 0 && data.order <= 100
+        && data.updatedAt is timestamp
+        && data.updatedAt == request.time;
+    }
+
+    function isValidLesson(data, userId) {
+      return data.keys().hasAll(['ownerId', 'grade', 'subjectId', 'date', 'unitTitle', 'lessonTitle', 'notes', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'ownerId', 'grade', 'subjectId', 'date', 'unitTitle', 'lessonTitle',
+          'bullets', 'standards', 'externalUrl', 'prepFlag',
+          'unitResourcesLabel', 'unitResourcesUrl', 'slidesUrl',
+          'notes', 'completed', 'themeOverride', 'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && isValidGrade(data.grade)
+        && isValidId(data.subjectId)
+        && data.subjectId.size() <= 64
+        && isValidDateStr(data.date)
+        && data.unitTitle is string && data.unitTitle.size() >= 1 && data.unitTitle.size() <= 140
+        && data.lessonTitle is string && data.lessonTitle.size() >= 1 && data.lessonTitle.size() <= 180
+        && data.notes is string && data.notes.size() <= 2000
+        && (!('bullets' in data) || (
+          data.bullets is list
+          && data.bullets.size() <= 10
+          && (data.bullets.size() == 0 || (data.bullets[0] is string && data.bullets[0].size() <= 200))
+        ))
+        && (!('standards' in data) || (data.standards is string && data.standards.size() <= 160))
+        && (!('externalUrl' in data) || (data.externalUrl is string && data.externalUrl.size() <= 500))
+        && (!('prepFlag' in data) || data.prepFlag is bool)
+        && (!('unitResourcesLabel' in data) || (data.unitResourcesLabel is string && data.unitResourcesLabel.size() <= 60))
+        && (!('unitResourcesUrl' in data) || (data.unitResourcesUrl is string && data.unitResourcesUrl.size() <= 500))
+        && (!('slidesUrl' in data) || (data.slidesUrl is string && data.slidesUrl.size() <= 500))
+        && (!('completed' in data) || data.completed is bool)
+        && (!('themeOverride' in data) || isValidTheme(data.themeOverride))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.updatedAt == request.time;
+    }
+
+    function isValidNonSchoolDay(data, userId) {
+      return data.keys().hasAll(['ownerId', 'date', 'label', 'createdAt'])
+        && data.keys().hasOnly(['ownerId', 'date', 'label', 'createdAt'])
+        && data.ownerId is string
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && isValidDateStr(data.date)
+        && data.label is string && data.label.size() >= 1 && data.label.size() <= 120
+        && data.createdAt is timestamp
+        && data.createdAt == request.time;
+    }
+
+    function isValidLessonProgress(data, userId, lessonId) {
+      return data.keys().hasAll(['ownerId', 'lessonId', 'completed', 'notes', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'lessonId', 'completed', 'notes', 'updatedAt'])
+        && data.ownerId is string
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && isValidId(data.lessonId)
+        && data.lessonId == lessonId
+        && data.completed is bool
+        && data.notes is string && data.notes.size() <= 2000
+        && data.updatedAt is timestamp
+        && data.updatedAt == request.time;
+    }
+
+    // Trusted Admin Registry
+    match /admins/{adminUid} {
+      allow get: if isValidId(adminUid) && (isOwner(adminUid) || isAdmin());
+      allow list: if false;
+      allow create: if isValidId(adminUid) && isAdmin() && isValidAdminUser(incoming(), adminUid);
+      allow update: if false;
+      allow delete: if isValidId(adminUid) && isAdmin();
+    }
+
+    // School-Wide Admin-Managed Skyward Schedules, Bell Calendar & Curriculum
+    match /schools/{schoolId} {
+      allow read, write: if false;
+
+      match /config/governance {
+        allow get: if isValidId(schoolId) && schoolId == 'milford_grade_school' && isSignedIn();
+        allow list: if false;
+        allow create: if isValidId(schoolId) && isAdmin() && isValidSchoolGovernance(incoming(), schoolId);
+        allow update: if isValidId(schoolId)
+          && isAdmin()
+          && isValidSchoolGovernance(incoming(), schoolId)
+          && incoming().schoolId == existing().schoolId
+          && incoming().diff(existing()).affectedKeys().hasOnly(['schoolName', 'lockTeacherSchedules', 'lockCurriculumUploads', 'updatedBy', 'updatedAt']);
+        allow delete: if false;
+      }
+
+      match /schedules/{scheduleDocId} {
+        allow get: if isValidId(schoolId) && schoolId == 'milford_grade_school' && isValidId(scheduleDocId) && isSignedIn();
+        allow list: if isValidId(schoolId) && isSignedIn() && existing().schoolId == 'milford_grade_school';
+        allow create: if isValidId(schoolId) && isValidId(scheduleDocId) && isAdmin() && isValidMasterScheduleBlock(incoming(), schoolId);
+        allow update: if isValidId(schoolId)
+          && isValidId(scheduleDocId)
+          && isAdmin()
+          && isValidMasterScheduleBlock(incoming(), schoolId)
+          && incoming().schoolId == existing().schoolId
+          && incoming().grade == existing().grade
+          && incoming().subjectId == existing().subjectId
+          && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'timeLabel', 'defaultTheme', 'visible', 'order', 'updatedBy', 'updatedAt']);
+        allow delete: if isValidId(schoolId) && isValidId(scheduleDocId) && isAdmin();
+      }
+
+      match /nonSchoolDays/{dayId} {
+        allow get: if isValidId(schoolId) && schoolId == 'milford_grade_school' && isValidId(dayId) && isSignedIn();
+        allow list: if isValidId(schoolId) && isSignedIn() && existing().schoolId == 'milford_grade_school';
+        allow create: if isValidId(schoolId) && isValidId(dayId) && isAdmin() && isValidMasterNonSchoolDay(incoming(), schoolId);
+        allow update: if false;
+        allow delete: if isValidId(schoolId) && isValidId(dayId) && isAdmin();
+      }
+
+      match /curriculum/{lessonId} {
+        allow get: if isValidId(schoolId) && schoolId == 'milford_grade_school' && isValidId(lessonId) && isSignedIn();
+        allow list: if isValidId(schoolId) && isSignedIn() && existing().schoolId == 'milford_grade_school';
+        allow create: if isValidId(schoolId)
+          && isValidId(lessonId)
+          && isAdmin()
+          && isValidMasterLesson(incoming(), schoolId)
+          && incoming().createdAt == request.time;
+        allow update: if isValidId(schoolId)
+          && isValidId(lessonId)
+          && isAdmin()
+          && isValidMasterLesson(incoming(), schoolId)
+          && incoming().schoolId == existing().schoolId
+          && incoming().createdAt == existing().createdAt
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'grade', 'subjectId', 'date', 'unitTitle', 'lessonTitle',
+            'bullets', 'standards', 'externalUrl', 'prepFlag',
+            'unitResourcesLabel', 'unitResourcesUrl', 'slidesUrl',
+            'notes', 'themeOverride', 'updatedBy', 'updatedAt'
+          ]);
+        allow delete: if isValidId(schoolId) && isValidId(lessonId) && isAdmin();
+      }
+    }
+
+    // User-scoped collections
+    match /users/{userId} {
+      allow read, write: if false;
+
+      match /private/account {
+        allow get: if isValidId(userId) && isOwner(userId);
+        allow list: if false;
+        allow create: if isValidId(userId) && isOwner(userId) && isValidPrivateAccount(incoming(), userId);
+        allow update, delete: if false;
+      }
+
+      match /workspace/settings {
+        allow get: if isValidId(userId) && isOwner(userId);
+        allow list: if false;
+        allow create: if isValidId(userId) && isOwner(userId) && isValidWorkspaceSettings(incoming(), userId);
+        allow update: if isValidId(userId)
+          && isOwner(userId)
+          && isValidWorkspaceSettings(incoming(), userId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'school', 'room', 'subNotes', 'roleMode', 'seeded', 'updatedAt']);
+        allow delete: if isValidId(userId) && isOwner(userId);
+      }
+
+      match /schedules/{scheduleDocId} {
+        allow get: if isValidId(userId) && isValidId(scheduleDocId) && isOwner(userId);
+        allow list: if isValidId(userId) && isOwner(userId) && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(scheduleDocId) && isOwner(userId) && (isAdmin() || !areTeacherSchedulesLocked()) && isValidScheduleBlock(incoming(), userId);
+        allow update: if isValidId(userId)
+          && isValidId(scheduleDocId)
+          && isOwner(userId)
+          && (isAdmin() || !areTeacherSchedulesLocked())
+          && isValidScheduleBlock(incoming(), userId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().grade == existing().grade
+          && incoming().subjectId == existing().subjectId
+          && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'timeLabel', 'defaultTheme', 'visible', 'order', 'updatedAt']);
+        allow delete: if isValidId(userId) && isValidId(scheduleDocId) && isOwner(userId) && (isAdmin() || !areTeacherSchedulesLocked());
+      }
+
+      match /lessons/{lessonId} {
+        allow get: if isValidId(userId) && isValidId(lessonId) && isOwner(userId);
+        allow list: if isValidId(userId) && isOwner(userId) && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidId(lessonId)
+          && isOwner(userId)
+          && (isAdmin() || !areCurriculumUploadsLocked())
+          && isValidLesson(incoming(), userId)
+          && incoming().createdAt == request.time;
+        allow update: if isValidId(userId)
+          && isValidId(lessonId)
+          && isOwner(userId)
+          && isValidLesson(incoming(), userId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['completed', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['notes', 'updatedAt']) ||
+            ((isAdmin() || !areCurriculumUploadsLocked()) && (
+              incoming().diff(existing()).affectedKeys().hasOnly(['date', 'updatedAt']) ||
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'grade', 'subjectId', 'date', 'unitTitle', 'lessonTitle',
+                'bullets', 'standards', 'externalUrl', 'prepFlag',
+                'unitResourcesLabel', 'unitResourcesUrl', 'slidesUrl',
+                'notes', 'completed', 'themeOverride', 'updatedAt'
+              ])
+            ))
+          );
+        allow delete: if isValidId(userId) && isValidId(lessonId) && isOwner(userId) && (isAdmin() || !areCurriculumUploadsLocked());
+      }
+
+      match /nonSchoolDays/{dayId} {
+        allow get: if isValidId(userId) && isValidId(dayId) && isOwner(userId);
+        allow list: if isValidId(userId) && isOwner(userId) && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(dayId) && isOwner(userId) && (isAdmin() || !areTeacherSchedulesLocked()) && isValidNonSchoolDay(incoming(), userId);
+        allow update: if false;
+        allow delete: if isValidId(userId) && isValidId(dayId) && isOwner(userId) && (isAdmin() || !areTeacherSchedulesLocked());
+      }
+
+      match /lessonProgress/{lessonId} {
+        allow get: if isValidId(userId) && isValidId(lessonId) && isOwner(userId);
+        allow list: if isValidId(userId) && isOwner(userId) && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(lessonId) && isOwner(userId) && isValidLessonProgress(incoming(), userId, lessonId);
+        allow update: if isValidId(userId)
+          && isValidId(lessonId)
+          && isOwner(userId)
+          && isValidLessonProgress(incoming(), userId, lessonId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().lessonId == existing().lessonId
+          && incoming().diff(existing()).affectedKeys().hasOnly(['completed', 'notes', 'updatedAt']);
+        allow delete: if isValidId(userId) && isValidId(lessonId) && isOwner(userId);
+      }
+    }
+  }
+}

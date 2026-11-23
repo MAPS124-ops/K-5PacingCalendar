@@ -1,0 +1,518 @@
+{
+  "entities": {
+    "UserPrivateAccount": {
+      "title": "UserPrivateAccount",
+      "description": "Private account record containing the user's email address, strictly isolated to the owning user.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 254
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ownerId", "email", "createdAt"]
+    },
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Trusted administrator grant document keyed by Firebase Auth UID.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "grantedBy": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "label", "grantedBy", "createdAt"]
+    },
+    "SchoolGovernance": {
+      "title": "SchoolGovernance",
+      "description": "School-wide administrative lock settings controlling whether teachers can upload or edit schedules and curriculum guides.",
+      "type": "object",
+      "properties": {
+        "schoolId": {
+          "type": "string",
+          "enum": ["milford_grade_school"]
+        },
+        "schoolName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "lockTeacherSchedules": {
+          "type": "boolean"
+        },
+        "lockCurriculumUploads": {
+          "type": "boolean"
+        },
+        "updatedBy": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["schoolId", "schoolName", "lockTeacherSchedules", "lockCurriculumUploads", "updatedBy", "updatedAt"]
+    },
+    "MasterScheduleBlock": {
+      "title": "MasterScheduleBlock",
+      "description": "School-wide K-5 subject bell schedule block uploaded by an administrator from Skyward OneRoster.",
+      "type": "object",
+      "properties": {
+        "schoolId": {
+          "type": "string",
+          "enum": ["milford_grade_school"]
+        },
+        "grade": {
+          "type": "string",
+          "enum": ["K", "1", "2", "3", "4", "5"]
+        },
+        "subjectId": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "timeLabel": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "defaultTheme": {
+          "type": "string",
+          "enum": ["navy", "teal", "indigo", "plum", "slate"]
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "order": {
+          "type": "number"
+        },
+        "updatedBy": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["schoolId", "grade", "subjectId", "name", "timeLabel", "defaultTheme", "visible", "order", "updatedBy", "updatedAt"]
+    },
+    "MasterNonSchoolDay": {
+      "title": "MasterNonSchoolDay",
+      "description": "School-wide holiday, break, or institute day uploaded by an administrator from Skyward.",
+      "type": "object",
+      "properties": {
+        "schoolId": {
+          "type": "string",
+          "enum": ["milford_grade_school"]
+        },
+        "date": {
+          "type": "string",
+          "maxLength": 10,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "updatedBy": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["schoolId", "date", "label", "updatedBy", "createdAt"]
+    },
+    "MasterLessonRecord": {
+      "title": "MasterLessonRecord",
+      "description": "School-wide K-5 curriculum pacing lesson published by an administrator.",
+      "type": "object",
+      "properties": {
+        "schoolId": {
+          "type": "string",
+          "enum": ["milford_grade_school"]
+        },
+        "grade": {
+          "type": "string",
+          "enum": ["K", "1", "2", "3", "4", "5"]
+        },
+        "subjectId": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "date": {
+          "type": "string",
+          "maxLength": 10,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "unitTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 140
+        },
+        "lessonTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180
+        },
+        "bullets": {
+          "type": "array"
+        },
+        "standards": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "externalUrl": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "prepFlag": {
+          "type": "boolean"
+        },
+        "unitResourcesLabel": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "unitResourcesUrl": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "slidesUrl": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "themeOverride": {
+          "type": "string",
+          "enum": ["navy", "teal", "indigo", "plum", "slate"]
+        },
+        "updatedBy": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["schoolId", "grade", "subjectId", "date", "unitTitle", "lessonTitle", "notes", "updatedBy", "createdAt", "updatedAt"]
+    },
+    "WorkspaceSettings": {
+      "title": "WorkspaceSettings",
+      "description": "Teacher profile preferences, classroom defaults, and editor/viewer role mode.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "school": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "room": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "subNotes": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "roleMode": {
+          "type": "string",
+          "enum": ["editor", "viewer"]
+        },
+        "seeded": {
+          "type": "boolean"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ownerId", "name", "school", "room", "subNotes", "roleMode", "seeded", "updatedAt"]
+    },
+    "SubjectScheduleBlock": {
+      "title": "SubjectScheduleBlock",
+      "description": "A single subject time-block entry within a teacher's grade-level bell schedule.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "grade": {
+          "type": "string",
+          "enum": ["K", "1", "2", "3", "4", "5"]
+        },
+        "subjectId": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "timeLabel": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "defaultTheme": {
+          "type": "string",
+          "enum": ["navy", "teal", "indigo", "plum", "slate"]
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "order": {
+          "type": "number"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ownerId", "grade", "subjectId", "name", "timeLabel", "defaultTheme", "visible", "order", "updatedAt"]
+    },
+    "LessonRecord": {
+      "title": "LessonRecord",
+      "description": "A scheduled K-5 curriculum lesson belonging to a specific teacher.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "grade": {
+          "type": "string",
+          "enum": ["K", "1", "2", "3", "4", "5"]
+        },
+        "subjectId": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "date": {
+          "type": "string",
+          "maxLength": 10,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "unitTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 140
+        },
+        "lessonTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180
+        },
+        "bullets": {
+          "type": "array"
+        },
+        "standards": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "externalUrl": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "prepFlag": {
+          "type": "boolean"
+        },
+        "unitResourcesLabel": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "unitResourcesUrl": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "slidesUrl": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "completed": {
+          "type": "boolean"
+        },
+        "themeOverride": {
+          "type": "string",
+          "enum": ["navy", "teal", "indigo", "plum", "slate"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ownerId", "grade", "subjectId", "date", "unitTitle", "lessonTitle", "notes", "createdAt", "updatedAt"]
+    },
+    "NonSchoolDayRecord": {
+      "title": "NonSchoolDayRecord",
+      "description": "District holiday or PD non-school date configured in the teacher's pacing calendar.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "date": {
+          "type": "string",
+          "maxLength": 10,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ownerId", "date", "label", "createdAt"]
+    },
+    "LessonProgress": {
+      "title": "LessonProgress",
+      "description": "Per-teacher taught status and personal notes overlaid onto admin-published master curriculum lessons.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "lessonId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "completed": {
+          "type": "boolean"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ownerId", "lessonId", "completed", "notes", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Trusted administrator access control list keyed by user UID."
+    },
+    "/schools/{schoolId}/config/governance": {
+      "schema": { "$ref": "#/entities/SchoolGovernance" },
+      "description": "School-wide administrative lock flags controlling teacher schedule and curriculum upload permissions."
+    },
+    "/schools/{schoolId}/schedules/{scheduleDocId}": {
+      "schema": { "$ref": "#/entities/MasterScheduleBlock" },
+      "description": "School-wide master K-5 bell schedules uploaded from Skyward OneRoster by an administrator."
+    },
+    "/schools/{schoolId}/nonSchoolDays/{dayId}": {
+      "schema": { "$ref": "#/entities/MasterNonSchoolDay" },
+      "description": "School-wide master holidays and institute days uploaded by an administrator."
+    },
+    "/schools/{schoolId}/curriculum/{lessonId}": {
+      "schema": { "$ref": "#/entities/MasterLessonRecord" },
+      "description": "School-wide master curriculum lessons published by an administrator."
+    },
+    "/users/{userId}/private/account": {
+      "schema": { "$ref": "#/entities/UserPrivateAccount" },
+      "description": "Strictly private user account PII document readable and writable only by the authenticated owner."
+    },
+    "/users/{userId}/workspace/settings": {
+      "schema": { "$ref": "#/entities/WorkspaceSettings" },
+      "description": "Teacher display preferences, classroom routines, and workspace mode settings."
+    },
+    "/users/{userId}/schedules/{scheduleDocId}": {
+      "schema": { "$ref": "#/entities/SubjectScheduleBlock" },
+      "description": "Per-grade subject bell schedule blocks owned by the user (locked when school governance locks teacher schedules)."
+    },
+    "/users/{userId}/lessons/{lessonId}": {
+      "schema": { "$ref": "#/entities/LessonRecord" },
+      "description": "Scheduled K-5 curriculum lessons owned by the user."
+    },
+    "/users/{userId}/nonSchoolDays/{dayId}": {
+      "schema": { "$ref": "#/entities/NonSchoolDayRecord" },
+      "description": "Non-school holidays and PD days configured by the user (locked when school governance locks teacher schedules)."
+    },
+    "/users/{userId}/lessonProgress/{lessonId}": {
+      "schema": { "$ref": "#/entities/LessonProgress" },
+      "description": "Per-teacher completion checkboxes and personal notes for school-wide master curriculum lessons."
+    }
+  }
+}
