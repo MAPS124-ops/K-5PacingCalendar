@@ -1,4 +1,4 @@
-import { CardTheme, GradeLevel, SubjectBlock } from '../types/pacing';
+import { CardTheme, GradeLevel, SubjectBlock, TeacherRosterAssignment } from '../types/pacing';
 import { parseDelimitedText } from './curriculumParser';
 
 export interface OneRosterTeacherOption {
@@ -309,24 +309,31 @@ export function parseOneRosterBundle(
   };
 }
 
-export function oneRosterClassesToSubjectBlocks(
-  parsedClasses: OneRosterParsedClass[]
-): SubjectBlock[] {
-  const seenNames = new Map<string, number>();
+export function canonicalSubjectSlug(title: string, fallbackIndex = 0): string {
+  return (
+    title
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 48) || `subject-${fallbackIndex}`
+  );
+}
 
-  return parsedClasses
+export function oneRosterClassesToBlocksWithMap(
+  parsedClasses: OneRosterParsedClass[]
+): { blocks: SubjectBlock[]; subjectIdByTempId: Record<string, string> } {
+  const seenNames = new Map<string, number>();
+  const subjectIdByTempId: Record<string, string> = {};
+
+  const blocks = parsedClasses
     .filter((c) => c.included && c.title.trim())
     .map((c, idx) => {
-      const slugBase = c.title
-        .trim()
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-|-$/g, '')
-        .slice(0, 48) || `subject-${idx}`;
-
+      const slugBase = canonicalSubjectSlug(c.title, idx);
       const count = seenNames.get(slugBase) ?? 0;
       seenNames.set(slugBase, count + 1);
       const id = count === 0 ? slugBase : `${slugBase}-${count + 1}`;
+      subjectIdByTempId[c.tempId] = id;
 
       return {
         id,
@@ -337,6 +344,72 @@ export function oneRosterClassesToSubjectBlocks(
         order: idx,
       };
     });
+
+  return { blocks, subjectIdByTempId };
+}
+
+export function oneRosterClassesToSubjectBlocks(
+  parsedClasses: OneRosterParsedClass[]
+): SubjectBlock[] {
+  return oneRosterClassesToBlocksWithMap(parsedClasses).blocks;
+}
+
+const GRADE_SORT_ORDER: GradeLevel[] = ['K', '1', '2', '3', '4', '5'];
+
+export function buildTeacherRostersFromOneRoster(
+  includedClasses: OneRosterParsedClass[],
+  teachers: OneRosterTeacherOption[],
+  subjectIdByTempId: Record<string, string>
+): Array<Omit<TeacherRosterAssignment, 'rosterId'>> {
+  const teacherById = new Map<string, OneRosterTeacherOption>();
+  teachers.forEach((t) => {
+    if (t.email.trim()) {
+      teacherById.set(t.sourcedId, t);
+    }
+  });
+
+  const byEmail = new Map<
+    string,
+    {
+      teacherEmail: string;
+      teacherName: string;
+      grades: Set<GradeLevel>;
+      subjects: Set<string>;
+    }
+  >();
+
+  includedClasses.forEach((cls) => {
+    if (!cls.included) return;
+    const subjectId = subjectIdByTempId[cls.tempId];
+    if (!subjectId) return;
+
+    cls.teacherIds.forEach((tid) => {
+      const teacher = teacherById.get(tid);
+      if (!teacher || !teacher.email.trim()) return;
+      const emailLower = teacher.email.trim().toLowerCase().slice(0, 254);
+      let entry = byEmail.get(emailLower);
+      if (!entry) {
+        entry = {
+          teacherEmail: emailLower,
+          teacherName: teacher.name.trim().slice(0, 100) || emailLower,
+          grades: new Set<GradeLevel>(),
+          subjects: new Set<string>(),
+        };
+        byEmail.set(emailLower, entry);
+      }
+      entry.grades.add(cls.grade);
+      entry.subjects.add(`${cls.grade}:${subjectId}`);
+    });
+  });
+
+  return Array.from(byEmail.values()).map((entry) => ({
+    teacherEmail: entry.teacherEmail,
+    teacherName: entry.teacherName,
+    assignedGrades: Array.from(entry.grades).sort(
+      (a, b) => GRADE_SORT_ORDER.indexOf(a) - GRADE_SORT_ORDER.indexOf(b)
+    ),
+    assignedSubjects: Array.from(entry.subjects).slice(0, 60),
+  }));
 }
 
 export function parseICSNonSchoolDays(icsText: string): ParsedICSEvent[] {
@@ -410,4 +483,27 @@ export const SAMPLE_ONEROSTER_CLASSES_CSV = [
   'cls-104,active,UFLI Foundations,01,crs-phn-1,PHN-101,milford-gs,2026-27,Phonics,12:35-1:10',
   'cls-105,active,Science,01,crs-sci-1,SCI-101,milford-gs,2026-27,Science,1:15-1:50',
   'cls-106,active,Social Studies,01,crs-ss-1,SS-101,milford-gs,2026-27,Social Studies,1:55-2:30',
+  'cls-201,active,Arts & Letters,02,crs-ela-2,ELA-201,milford-gs,2026-27,ELA,8:30-9:30',
+  'cls-202,active,Everyday Math,02,crs-mth-2,MTH-201,milford-gs,2026-27,Mathematics,9:35-10:35',
+  'cls-301,active,K-5 Music,"KG,01,02,03,04,05",crs-mus,MUS-K5,milford-gs,2026-27,Music,2:00-2:40',
+].join('\n');
+
+export const SAMPLE_ONEROSTER_USERS_CSV = [
+  'sourcedId,status,enabledUser,username,givenName,familyName,role,email',
+  'tch-1,active,true,asmith,Amy,Smith,teacher,asmith@mpsk12.org',
+  'tch-2,active,true,mjones,Mark,Jones,teacher,mjones@mpsk12.org',
+  'tch-3,active,true,ldavis,Laura,Davis,teacher,ldavis@mpsk12.org',
+].join('\n');
+
+export const SAMPLE_ONEROSTER_ENROLLMENTS_CSV = [
+  'sourcedId,status,classSourcedId,schoolSourcedId,userSourcedId,role,primary',
+  'enr-1,active,cls-101,milford-gs,tch-1,teacher,true',
+  'enr-2,active,cls-102,milford-gs,tch-1,teacher,true',
+  'enr-3,active,cls-103,milford-gs,tch-1,teacher,true',
+  'enr-4,active,cls-104,milford-gs,tch-1,teacher,true',
+  'enr-5,active,cls-105,milford-gs,tch-1,teacher,true',
+  'enr-6,active,cls-106,milford-gs,tch-1,teacher,true',
+  'enr-7,active,cls-201,milford-gs,tch-2,teacher,true',
+  'enr-8,active,cls-202,milford-gs,tch-2,teacher,true',
+  'enr-9,active,cls-301,milford-gs,tch-3,teacher,true',
 ].join('\n');

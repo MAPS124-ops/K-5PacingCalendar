@@ -34,6 +34,14 @@ service cloud.firestore {
       );
     }
 
+    function isOwnerRosterEmail(rosterId) {
+      return isSignedIn()
+        && request.auth.token.email is string
+        && request.auth.token.email.size() <= 128
+        && request.auth.token.email_verified == true
+        && rosterId == request.auth.token.email.lower().replace('[^a-z0-9_\\-]', '_');
+    }
+
     function areTeacherSchedulesLocked() {
       return exists(/databases/$(database)/documents/schools/milford_grade_school/config/governance)
         && get(/databases/$(database)/documents/schools/milford_grade_school/config/governance).data.lockTeacherSchedules == true;
@@ -70,12 +78,44 @@ service cloud.firestore {
 
     function isValidSchoolGovernance(data, schoolId) {
       return data.keys().hasAll(['schoolId', 'schoolName', 'lockTeacherSchedules', 'lockCurriculumUploads', 'updatedBy', 'updatedAt'])
-        && data.keys().hasOnly(['schoolId', 'schoolName', 'lockTeacherSchedules', 'lockCurriculumUploads', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['schoolId', 'schoolName', 'lockTeacherSchedules', 'lockCurriculumUploads', 'requireAssignedRoster', 'updatedBy', 'updatedAt'])
         && data.schoolId == 'milford_grade_school'
         && data.schoolId == schoolId
         && data.schoolName is string && data.schoolName.size() >= 1 && data.schoolName.size() <= 120
         && data.lockTeacherSchedules is bool
         && data.lockCurriculumUploads is bool
+        && (!('requireAssignedRoster' in data) || data.requireAssignedRoster is bool)
+        && data.updatedBy is string && data.updatedBy == request.auth.uid
+        && data.updatedAt is timestamp
+        && data.updatedAt == request.time;
+    }
+
+    function isValidRosterDirectory(data, schoolId) {
+      return data.keys().hasAll(['schoolId', 'rosterIds', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['schoolId', 'rosterIds', 'updatedBy', 'updatedAt'])
+        && data.schoolId == 'milford_grade_school'
+        && data.schoolId == schoolId
+        && data.rosterIds is list
+        && data.rosterIds.size() <= 500
+        && (data.rosterIds.size() == 0 || (data.rosterIds[0] is string && isValidId(data.rosterIds[0])))
+        && data.updatedBy is string && data.updatedBy == request.auth.uid
+        && data.updatedAt is timestamp
+        && data.updatedAt == request.time;
+    }
+
+    function isValidTeacherRoster(data, schoolId) {
+      return data.keys().hasAll(['schoolId', 'teacherEmail', 'teacherName', 'assignedGrades', 'assignedSubjects', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['schoolId', 'teacherEmail', 'teacherName', 'assignedGrades', 'assignedSubjects', 'updatedBy', 'updatedAt'])
+        && data.schoolId == 'milford_grade_school'
+        && data.schoolId == schoolId
+        && data.teacherEmail is string && data.teacherEmail.size() >= 3 && data.teacherEmail.size() <= 254
+        && data.teacherName is string && data.teacherName.size() >= 1 && data.teacherName.size() <= 100
+        && data.assignedGrades is list
+        && data.assignedGrades.size() <= 6
+        && data.assignedGrades.hasOnly(['K', '1', '2', '3', '4', '5'])
+        && data.assignedSubjects is list
+        && data.assignedSubjects.size() <= 60
+        && (data.assignedSubjects.size() == 0 || (data.assignedSubjects[0] is string && data.assignedSubjects[0].size() >= 1 && data.assignedSubjects[0].size() <= 80))
         && data.updatedBy is string && data.updatedBy == request.auth.uid
         && data.updatedAt is timestamp
         && data.updatedAt == request.time;
@@ -262,35 +302,70 @@ service cloud.firestore {
     match /admins/{adminUid} {
       allow get: if isValidId(adminUid) && (isOwner(adminUid) || isAdmin());
       allow list: if false;
-      allow create: if isValidId(adminUid) && isAdmin() && isValidAdminUser(incoming(), adminUid);
+      allow create: if isValidId(adminUid) && isValidAdminUser(incoming(), adminUid) && isAdmin();
       allow update: if false;
       allow delete: if isValidId(adminUid) && isAdmin();
     }
 
-    // School-Wide Admin-Managed Skyward Schedules, Bell Calendar & Curriculum
+    // School-Wide Admin-Managed Skyward Schedules, Bell Calendar, Rosters & Curriculum
     match /schools/{schoolId} {
       allow read, write: if false;
 
       match /config/governance {
         allow get: if isValidId(schoolId) && schoolId == 'milford_grade_school' && isSignedIn();
         allow list: if false;
-        allow create: if isValidId(schoolId) && isAdmin() && isValidSchoolGovernance(incoming(), schoolId);
+        allow create: if isValidId(schoolId) && isValidSchoolGovernance(incoming(), schoolId) && isAdmin();
         allow update: if isValidId(schoolId)
-          && isAdmin()
           && isValidSchoolGovernance(incoming(), schoolId)
+          && isAdmin()
           && incoming().schoolId == existing().schoolId
-          && incoming().diff(existing()).affectedKeys().hasOnly(['schoolName', 'lockTeacherSchedules', 'lockCurriculumUploads', 'updatedBy', 'updatedAt']);
+          && incoming().diff(existing()).affectedKeys().hasOnly(['schoolName', 'lockTeacherSchedules', 'lockCurriculumUploads', 'requireAssignedRoster', 'updatedBy', 'updatedAt']);
         allow delete: if false;
+      }
+
+      match /config/rosterDirectory {
+        allow get: if isValidId(schoolId) && schoolId == 'milford_grade_school' && isAdmin();
+        allow list: if false;
+        allow create: if isValidId(schoolId) && isValidRosterDirectory(incoming(), schoolId) && isAdmin();
+        allow update: if isValidId(schoolId)
+          && isValidRosterDirectory(incoming(), schoolId)
+          && isAdmin()
+          && incoming().schoolId == existing().schoolId
+          && incoming().diff(existing()).affectedKeys().hasOnly(['rosterIds', 'updatedBy', 'updatedAt']);
+        allow delete: if false;
+      }
+
+      match /teacherRosters/{rosterId} {
+        allow get: if isValidId(schoolId)
+          && schoolId == 'milford_grade_school'
+          && isValidId(rosterId)
+          && (
+            isAdmin() ||
+            (isOwnerRosterEmail(rosterId) && (resource == null || existing().teacherEmail == request.auth.token.email.lower()))
+          );
+        allow list: if false;
+        allow create: if isValidId(schoolId)
+          && isValidId(rosterId)
+          && isValidTeacherRoster(incoming(), schoolId)
+          && isAdmin();
+        allow update: if isValidId(schoolId)
+          && isValidId(rosterId)
+          && isValidTeacherRoster(incoming(), schoolId)
+          && isAdmin()
+          && incoming().schoolId == existing().schoolId
+          && incoming().teacherEmail == existing().teacherEmail
+          && incoming().diff(existing()).affectedKeys().hasOnly(['teacherName', 'assignedGrades', 'assignedSubjects', 'updatedBy', 'updatedAt']);
+        allow delete: if isValidId(schoolId) && isValidId(rosterId) && isAdmin();
       }
 
       match /schedules/{scheduleDocId} {
         allow get: if isValidId(schoolId) && schoolId == 'milford_grade_school' && isValidId(scheduleDocId) && isSignedIn();
         allow list: if isValidId(schoolId) && isSignedIn() && existing().schoolId == 'milford_grade_school';
-        allow create: if isValidId(schoolId) && isValidId(scheduleDocId) && isAdmin() && isValidMasterScheduleBlock(incoming(), schoolId);
+        allow create: if isValidId(schoolId) && isValidId(scheduleDocId) && isValidMasterScheduleBlock(incoming(), schoolId) && isAdmin();
         allow update: if isValidId(schoolId)
           && isValidId(scheduleDocId)
-          && isAdmin()
           && isValidMasterScheduleBlock(incoming(), schoolId)
+          && isAdmin()
           && incoming().schoolId == existing().schoolId
           && incoming().grade == existing().grade
           && incoming().subjectId == existing().subjectId
@@ -301,7 +376,7 @@ service cloud.firestore {
       match /nonSchoolDays/{dayId} {
         allow get: if isValidId(schoolId) && schoolId == 'milford_grade_school' && isValidId(dayId) && isSignedIn();
         allow list: if isValidId(schoolId) && isSignedIn() && existing().schoolId == 'milford_grade_school';
-        allow create: if isValidId(schoolId) && isValidId(dayId) && isAdmin() && isValidMasterNonSchoolDay(incoming(), schoolId);
+        allow create: if isValidId(schoolId) && isValidId(dayId) && isValidMasterNonSchoolDay(incoming(), schoolId) && isAdmin();
         allow update: if false;
         allow delete: if isValidId(schoolId) && isValidId(dayId) && isAdmin();
       }
@@ -311,13 +386,13 @@ service cloud.firestore {
         allow list: if isValidId(schoolId) && isSignedIn() && existing().schoolId == 'milford_grade_school';
         allow create: if isValidId(schoolId)
           && isValidId(lessonId)
-          && isAdmin()
           && isValidMasterLesson(incoming(), schoolId)
-          && incoming().createdAt == request.time;
+          && incoming().createdAt == request.time
+          && isAdmin();
         allow update: if isValidId(schoolId)
           && isValidId(lessonId)
-          && isAdmin()
           && isValidMasterLesson(incoming(), schoolId)
+          && isAdmin()
           && incoming().schoolId == existing().schoolId
           && incoming().createdAt == existing().createdAt
           && incoming().diff(existing()).affectedKeys().hasOnly([
@@ -356,12 +431,12 @@ service cloud.firestore {
       match /schedules/{scheduleDocId} {
         allow get: if isValidId(userId) && isValidId(scheduleDocId) && isOwner(userId);
         allow list: if isValidId(userId) && isOwner(userId) && existing().ownerId == request.auth.uid;
-        allow create: if isValidId(userId) && isValidId(scheduleDocId) && isOwner(userId) && (isAdmin() || !areTeacherSchedulesLocked()) && isValidScheduleBlock(incoming(), userId);
+        allow create: if isValidId(userId) && isValidId(scheduleDocId) && isOwner(userId) && isValidScheduleBlock(incoming(), userId) && (isAdmin() || !areTeacherSchedulesLocked());
         allow update: if isValidId(userId)
           && isValidId(scheduleDocId)
           && isOwner(userId)
-          && (isAdmin() || !areTeacherSchedulesLocked())
           && isValidScheduleBlock(incoming(), userId)
+          && (isAdmin() || !areTeacherSchedulesLocked())
           && incoming().ownerId == existing().ownerId
           && incoming().grade == existing().grade
           && incoming().subjectId == existing().subjectId
@@ -375,9 +450,9 @@ service cloud.firestore {
         allow create: if isValidId(userId)
           && isValidId(lessonId)
           && isOwner(userId)
-          && (isAdmin() || !areCurriculumUploadsLocked())
           && isValidLesson(incoming(), userId)
-          && incoming().createdAt == request.time;
+          && incoming().createdAt == request.time
+          && (isAdmin() || !areCurriculumUploadsLocked());
         allow update: if isValidId(userId)
           && isValidId(lessonId)
           && isOwner(userId)
@@ -403,7 +478,7 @@ service cloud.firestore {
       match /nonSchoolDays/{dayId} {
         allow get: if isValidId(userId) && isValidId(dayId) && isOwner(userId);
         allow list: if isValidId(userId) && isOwner(userId) && existing().ownerId == request.auth.uid;
-        allow create: if isValidId(userId) && isValidId(dayId) && isOwner(userId) && (isAdmin() || !areTeacherSchedulesLocked()) && isValidNonSchoolDay(incoming(), userId);
+        allow create: if isValidId(userId) && isValidId(dayId) && isOwner(userId) && isValidNonSchoolDay(incoming(), userId) && (isAdmin() || !areTeacherSchedulesLocked());
         allow update: if false;
         allow delete: if isValidId(userId) && isValidId(dayId) && isOwner(userId) && (isAdmin() || !areTeacherSchedulesLocked());
       }

@@ -241,4 +241,18 @@ export const DIRTY_DOZEN_CASES: DirtyPayloadCase[] = [
     },
     expected: 'PERMISSION_DENIED',
   },
+  {
+    name: '18. Cross-teacher PII snooping on another teacher roster assignment',
+    actorUid: 'teacherB',
+    operation: 'get',
+    path: 'schools/milford_grade_school/teacherRosters/teachera_mpsk12_org',
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    name: '19. Non-admin attempting to read admin-only rosterDirectory',
+    actorUid: 'teacherB',
+    operation: 'get',
+    path: 'schools/milford_grade_school/config/rosterDirectory',
+    expected: 'PERMISSION_DENIED',
+  },
 ];

@@ -31,12 +31,15 @@ import {
   deleteMasterCurriculumLesson,
   deleteMasterNonSchoolDay,
   deleteNonSchoolDayRecord,
+  deleteTeacherRosterAssignment,
   ensureSchoolGovernanceInitialized,
   ensureUserWorkspaceInitialized,
+  fetchAllTeacherRosters,
   grantAdminAccess,
   publishMasterCurriculumBatch,
   publishMasterNonSchoolDaysBatch,
   publishMasterSchedules,
+  publishTeacherRostersBatch,
   replaceLessonsBatch,
   revokeAdminAccess,
   saveGradeScheduleBlocks,
@@ -47,6 +50,7 @@ import {
   saveSchoolGovernance,
   saveTeacherLessonProgress,
   subscribeSchoolMasterData,
+  subscribeTeacherRoster,
   subscribeUserWorkspace,
   updateLessonCompletion,
   updateLessonDatesBatch,
@@ -62,9 +66,11 @@ import {
   SchoolGovernance,
   SubjectBlock,
   TeacherProfile,
+  TeacherRosterAssignment,
   ViewTab,
 } from './types/pacing';
 import { addSchoolDaysISO, toISODate } from './utils/dateUtils';
+import { canonicalSubjectSlug } from './utils/oneRosterParser';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -88,6 +94,8 @@ export default function App() {
   const [masterNonSchoolDays, setMasterNonSchoolDays] = useState<NonSchoolDay[]>([]);
   const [masterLessons, setMasterLessons] = useState<LessonItem[]>([]);
   const [lessonProgress, setLessonProgress] = useState<Record<string, LessonProgressRecord>>({});
+  const [myRoster, setMyRoster] = useState<TeacherRosterAssignment | null>(null);
+  const [rosterLoaded, setRosterLoaded] = useState(false);
 
   const [selectedGrade, setSelectedGrade] = useState<GradeLevel>('1');
   const [selectedDate, setSelectedDate] = useState<string>(DEFAULT_ANCHOR_DATE);
@@ -137,6 +145,8 @@ export default function App() {
         setMasterNonSchoolDays([]);
         setMasterLessons([]);
         setLessonProgress({});
+        setMyRoster(null);
+        setRosterLoaded(false);
         setAdminConsoleOpen(false);
         setWorkspaceLoading(false);
       }
@@ -150,6 +160,7 @@ export default function App() {
     let cancelled = false;
     let unsubscribeMaster: (() => void) | undefined;
     let unsubscribeWorkspace: (() => void) | undefined;
+    let unsubscribeRoster: (() => void) | undefined;
 
     async function initAndSubscribe(currentUser: User) {
       setWorkspaceLoading(true);
@@ -205,9 +216,22 @@ export default function App() {
             setLessonProgress(progress);
           },
         });
+
+        if (!adminStatus && currentUser.email && currentUser.emailVerified) {
+          unsubscribeRoster = subscribeTeacherRoster(currentUser.email, (roster) => {
+            if (!cancelled) {
+              setMyRoster(roster);
+              setRosterLoaded(true);
+            }
+          });
+        } else {
+          setMyRoster(null);
+          setRosterLoaded(true);
+        }
       } catch (err) {
         console.error('Failed to initialize workspace:', err);
         setWorkspaceLoading(false);
+        setRosterLoaded(true);
       }
     }
 
@@ -217,6 +241,7 @@ export default function App() {
       cancelled = true;
       if (unsubscribeMaster) unsubscribeMaster();
       if (unsubscribeWorkspace) unsubscribeWorkspace();
+      if (unsubscribeRoster) unsubscribeRoster();
     };
   }, [authReady, user]);
 
@@ -261,6 +286,85 @@ export default function App() {
     return [...overlaidMaster, ...appState.lessons];
   }, [masterLessons, lessonProgress, appState.lessons]);
 
+  const isRosterScoped = Boolean(
+    user &&
+      !isAdmin &&
+      myRoster &&
+      (myRoster.assignedGrades.length > 0 || myRoster.assignedSubjects.length > 0)
+  );
+
+  const visibleGrades: GradeLevel[] = useMemo(() => {
+    if (isRosterScoped && myRoster && myRoster.assignedGrades.length > 0) {
+      return GRADES.map((g) => g.id).filter((id) =>
+        myRoster.assignedGrades.includes(id)
+      );
+    }
+    return GRADES.map((g) => g.id);
+  }, [isRosterScoped, myRoster]);
+
+  useEffect(() => {
+    if (visibleGrades.length > 0 && !visibleGrades.includes(selectedGrade)) {
+      setSelectedGrade(visibleGrades[0]);
+    }
+  }, [visibleGrades, selectedGrade]);
+
+  const scopedSchedulesByGrade = useMemo(() => {
+    if (!isRosterScoped || !myRoster) return effectiveSchedulesByGrade;
+    const result = {} as Record<GradeLevel, SubjectBlock[]>;
+    for (const g of GRADES) {
+      const gid = g.id;
+      const blocks = effectiveSchedulesByGrade[gid] ?? [];
+      if (!visibleGrades.includes(gid)) {
+        result[gid] = [];
+        continue;
+      }
+      const prefix = `${gid}:`;
+      const gradeSubjectIds = new Set(
+        myRoster.assignedSubjects
+          .filter((key) => key.startsWith(prefix))
+          .map((key) => key.slice(prefix.length))
+      );
+      if (gradeSubjectIds.size === 0) {
+        result[gid] = blocks;
+      } else {
+        result[gid] = blocks.filter((b) => gradeSubjectIds.has(b.id));
+      }
+    }
+    return result;
+  }, [isRosterScoped, myRoster, effectiveSchedulesByGrade, visibleGrades]);
+
+  const scopedLessons = useMemo(() => {
+    if (!isRosterScoped) return effectiveLessons;
+    const output: LessonItem[] = [];
+
+    for (const lesson of effectiveLessons) {
+      if (!visibleGrades.includes(lesson.grade)) continue;
+      const allowedBlocks = scopedSchedulesByGrade[lesson.grade] ?? [];
+      if (allowedBlocks.length === 0) continue;
+
+      const exactMatch = allowedBlocks.find((b) => b.id === lesson.subjectId);
+      if (exactMatch) {
+        output.push(lesson);
+        continue;
+      }
+
+      // Section aliasing: if a teacher teaches section 2 (e.g. everyday-math-2)
+      // and master curriculum is keyed under canonical slug (everyday-math),
+      // project it onto their assigned section block.
+      const aliasMatches = allowedBlocks.filter(
+        (b) => canonicalSubjectSlug(b.name) === lesson.subjectId
+      );
+      for (const matchedBlock of aliasMatches) {
+        output.push({
+          ...lesson,
+          subjectId: matchedBlock.id,
+        });
+      }
+    }
+
+    return output;
+  }, [isRosterScoped, effectiveLessons, visibleGrades, scopedSchedulesByGrade]);
+
   if (!authReady) {
     return (
       <div className="min-h-screen bg-[#F4F6FA] flex items-center justify-center">
@@ -289,8 +393,15 @@ export default function App() {
       !isAdmin
   );
 
-  const gradeSubjects = effectiveSchedulesByGrade[selectedGrade] ?? [];
-  const gradeLessons = effectiveLessons.filter((l) => l.grade === selectedGrade);
+  const isUnassignedBlocked = Boolean(
+    !isAdmin && governance.requireAssignedRoster && rosterLoaded && !myRoster
+  );
+  const needsTeacherEmailVerification = Boolean(
+    !isAdmin && !user.emailVerified && (governance.requireAssignedRoster || hasMasterSchedules)
+  );
+
+  const gradeSubjects = scopedSchedulesByGrade[selectedGrade] ?? [];
+  const gradeLessons = scopedLessons.filter((l) => l.grade === selectedGrade);
   const gradeLabel =
     GRADES.find((g) => g.id === selectedGrade)?.label ?? '1st Grade';
 
@@ -309,6 +420,23 @@ export default function App() {
       await sendEmailVerification(user);
       showToast(
         `Verification link sent to ${user.email}. Click the link or sign in with Google, then click Verify Admin again.`
+      );
+    } catch {
+      showToast('Could not send verification email right now. You can also sign in with Google.');
+    }
+  };
+
+  const handleVerifyTeacherEmail = async () => {
+    try {
+      await user.reload();
+      if (user.emailVerified) {
+        showToast('Email verified! Checking your assigned Skyward classes...');
+        window.location.reload();
+        return;
+      }
+      await sendEmailVerification(user);
+      showToast(
+        `Verification link sent to ${user.email}. Click the link or sign in with Google to load your assigned classes.`
       );
     } catch {
       showToast('Could not send verification email right now. You can also sign in with Google.');
@@ -642,12 +770,19 @@ export default function App() {
   };
 
   const handlePublishMasterSchedules = async (
-    updatedByGrade: Partial<Record<GradeLevel, SubjectBlock[]>>
+    updatedByGrade: Partial<Record<GradeLevel, SubjectBlock[]>>,
+    teacherRosters?: Array<Omit<TeacherRosterAssignment, 'rosterId'>>,
+    replaceRosters?: boolean
   ) => {
     await publishMasterSchedules(uid, masterSchedulesByGrade, updatedByGrade);
+    if (teacherRosters && teacherRosters.length > 0) {
+      await publishTeacherRostersBatch(uid, teacherRosters, Boolean(replaceRosters));
+    }
     const count = Object.keys(updatedByGrade).length;
     showToast(
-      `Published Skyward master schedule for ${count} grade level${count === 1 ? '' : 's'}`
+      teacherRosters && teacherRosters.length > 0
+        ? `Published Skyward schedules (${count} grade${count === 1 ? '' : 's'}) & ${teacherRosters.length} teacher roster${teacherRosters.length === 1 ? '' : 's'}`
+        : `Published Skyward master schedule for ${count} grade level${count === 1 ? '' : 's'}`
     );
   };
 
@@ -701,10 +836,18 @@ export default function App() {
         onLogout={handleLogout}
       />
 
-      <GradeTabs
-        selectedGrade={selectedGrade}
-        onSelectGrade={setSelectedGrade}
-      />
+      {!isUnassignedBlocked && (
+        <GradeTabs
+          selectedGrade={selectedGrade}
+          onSelectGrade={setSelectedGrade}
+          visibleGrades={visibleGrades}
+          assignedLabel={
+            isRosterScoped
+              ? `Assigned Classes: ${myRoster?.teacherName || user.email}`
+              : null
+          }
+        />
+      )}
 
       <main className="no-print flex-1 max-w-[1320px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-4">
         {needsAdminEmailVerification && (
@@ -725,6 +868,40 @@ export default function App() {
             </button>
           </div>
         )}
+
+        {!needsAdminEmailVerification && needsTeacherEmailVerification && (
+          <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+              <div>
+                <strong>Verify Your Email to Load Your Assigned Classes:</strong>{' '}
+                Verify <strong>{user.email}</strong> (or sign in with Google) so Milford Grade School can direct you directly to the classes you teach.
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleVerifyTeacherEmail}
+              className="px-3.5 py-1.5 rounded-lg bg-amber-600 text-white font-semibold hover:bg-amber-700 shrink-0 cursor-pointer"
+            >
+              Verify Email
+            </button>
+          </div>
+        )}
+
+        {isUnassignedBlocked ? (
+          <div className="rounded-2xl bg-white border border-slate-200/90 shadow-[0_2px_10px_rgba(15,23,42,0.03)] p-8 text-center max-w-xl mx-auto my-8 space-y-3">
+            <div className="w-11 h-11 rounded-full bg-[#EEF1F8] text-[#1D2F6F] flex items-center justify-center mx-auto">
+              <Lock className="w-5 h-5" />
+            </div>
+            <h2 className="text-lg font-bold text-[#182756]">
+              No Assigned Classes Found for {user.email}
+            </h2>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Milford Grade School currently limits teachers to their assigned Skyward class roster. Your account does not have any grade or class assignments yet. Please contact your school administrator to assign your email in the Admin Console (or publish OneRoster <strong>users.csv</strong> &amp; <strong>enrollments.csv</strong>).
+            </p>
+          </div>
+        ) : (
+          <>
 
         {(schedulesLockedForTeacher || curriculumLockedForTeacher) && (
           <div className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 flex items-center justify-between gap-3 text-xs text-slate-600 shadow-[0_1px_3px_rgba(15,23,42,0.03)]">
@@ -858,6 +1035,8 @@ export default function App() {
             </>
           )}
         </div>
+          </>
+        )}
       </main>
 
       {/* Modals */}
@@ -883,7 +1062,7 @@ export default function App() {
         selectedGrade={selectedGrade}
         gradeLabel={gradeLabel}
         subjects={gradeSubjects}
-        existingSchedulesByGrade={effectiveSchedulesByGrade}
+        existingSchedulesByGrade={scopedSchedulesByGrade}
         isAdmin={isAdmin}
         lockedByAdmin={governance.lockTeacherSchedules}
         onOpenAdminConsole={() => setAdminConsoleOpen(true)}
@@ -925,6 +1104,16 @@ export default function App() {
           onClose={() => setAdminConsoleOpen(false)}
           onSaveGovernance={handleSaveGovernance}
           onPublishMasterSchedules={handlePublishMasterSchedules}
+          onLoadTeacherRosters={fetchAllTeacherRosters}
+          onSaveTeacherRoster={async (roster) => {
+            await publishTeacherRostersBatch(uid, [roster], false);
+            showToast(`Saved class roster for ${roster.teacherEmail}`);
+            return fetchAllTeacherRosters();
+          }}
+          onDeleteTeacherRoster={async (rosterId) => {
+            await deleteTeacherRosterAssignment(uid, rosterId);
+            showToast('Removed teacher class assignment');
+          }}
           onPublishMasterNonSchoolDays={handlePublishMasterNonSchoolDays}
           onDeleteMasterNonSchoolDay={handleDeleteMasterNonSchoolDay}
           onPublishMasterCurriculum={handlePublishMasterCurriculum}

@@ -59,6 +59,15 @@ export interface SchoolGovernance {
   schoolName: string;
   lockTeacherSchedules: boolean;
   lockCurriculumUploads: boolean;
+  requireAssignedRoster?: boolean;
+}
+
+export interface TeacherRosterAssignment {
+  rosterId: string;
+  teacherEmail: string;
+  teacherName: string;
+  assignedGrades: GradeLevel[];
+  assignedSubjects: string[]; // `${grade}:${subjectId}`
 }
 
 export interface LessonProgressRecord {

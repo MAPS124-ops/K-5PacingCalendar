@@ -26,6 +26,7 @@ import {
   SchoolGovernance,
   SubjectBlock,
   TeacherProfile,
+  TeacherRosterAssignment,
 } from '../types/pacing';
 
 export const SCHOOL_ID = 'milford_grade_school' as const;
@@ -39,7 +40,17 @@ export const DEFAULT_GOVERNANCE: SchoolGovernance = {
   schoolName: 'Milford Grade School',
   lockTeacherSchedules: true,
   lockCurriculumUploads: true,
+  requireAssignedRoster: false,
 };
+
+export function emailToRosterDocId(email: string): string {
+  const cleaned = email
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '_')
+    .slice(0, 128);
+  return cleaned.length > 0 ? cleaned : `teacher-${Date.now()}`;
+}
 
 function sanitizeId(raw: string, maxLen = 128): string {
   const cleaned = raw.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, maxLen);
@@ -184,6 +195,7 @@ export async function ensureSchoolGovernanceInitialized(
         schoolName: 'Milford Grade School',
         lockTeacherSchedules: true,
         lockCurriculumUploads: true,
+        requireAssignedRoster: false,
         updatedBy: uid,
         updatedAt: serverTimestamp(),
       });
@@ -390,6 +402,7 @@ export function subscribeSchoolMasterData(callbacks: {
           schoolName: String(d.schoolName ?? 'Milford Grade School'),
           lockTeacherSchedules: Boolean(d.lockTeacherSchedules),
           lockCurriculumUploads: Boolean(d.lockCurriculumUploads),
+          requireAssignedRoster: Boolean(d.requireAssignedRoster),
         });
       },
       (error) => {
@@ -674,9 +687,202 @@ export function subscribeUserWorkspace(
   };
 }
 
+export function subscribeTeacherRoster(
+  email: string,
+  onRoster: (roster: TeacherRosterAssignment | null) => void
+): () => void {
+  const rosterId = emailToRosterDocId(email);
+  const path = `schools/${SCHOOL_ID}/teacherRosters/${rosterId}`;
+  return onSnapshot(
+    doc(db, path),
+    (snap) => {
+      if (!snap.exists()) {
+        onRoster(null);
+        return;
+      }
+      const d = snap.data();
+      onRoster({
+        rosterId: snap.id,
+        teacherEmail: String(d.teacherEmail ?? email).toLowerCase(),
+        teacherName: String(d.teacherName ?? ''),
+        assignedGrades: Array.isArray(d.assignedGrades)
+          ? (d.assignedGrades.filter((g) =>
+              VALID_GRADES.includes(g as GradeLevel)
+            ) as GradeLevel[])
+          : [],
+        assignedSubjects: Array.isArray(d.assignedSubjects)
+          ? d.assignedSubjects.map(String).filter(Boolean)
+          : [],
+      });
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.GET, path);
+    }
+  );
+}
+
 // ==========================================
 // Admin-Only School-Wide Publishing Helpers
 // ==========================================
+
+export async function fetchAllTeacherRosters(): Promise<TeacherRosterAssignment[]> {
+  const dirPath = `schools/${SCHOOL_ID}/config/rosterDirectory`;
+  let rosterIds: string[] = [];
+  try {
+    const dirSnap = await getDoc(doc(db, dirPath));
+    if (!dirSnap.exists()) return [];
+    const raw = dirSnap.data()?.rosterIds;
+    rosterIds = Array.isArray(raw) ? raw.map(String).filter(Boolean) : [];
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, dirPath);
+    return [];
+  }
+
+  const results: TeacherRosterAssignment[] = [];
+  await Promise.all(
+    rosterIds.map(async (rid) => {
+      const itemPath = `schools/${SCHOOL_ID}/teacherRosters/${rid}`;
+      try {
+        const snap = await getDoc(doc(db, itemPath));
+        if (snap.exists()) {
+          const d = snap.data();
+          results.push({
+            rosterId: snap.id,
+            teacherEmail: String(d.teacherEmail ?? '').toLowerCase(),
+            teacherName: String(d.teacherName ?? ''),
+            assignedGrades: Array.isArray(d.assignedGrades)
+              ? (d.assignedGrades.filter((g) =>
+                  VALID_GRADES.includes(g as GradeLevel)
+                ) as GradeLevel[])
+              : [],
+            assignedSubjects: Array.isArray(d.assignedSubjects)
+              ? d.assignedSubjects.map(String).filter(Boolean)
+              : [],
+          });
+        }
+      } catch (error) {
+        handleFirestoreError(error, OperationType.GET, itemPath);
+      }
+    })
+  );
+
+  return results.sort((a, b) => a.teacherName.localeCompare(b.teacherName));
+}
+
+export async function publishTeacherRostersBatch(
+  uid: string,
+  rosters: Array<Omit<TeacherRosterAssignment, 'rosterId'>>,
+  replaceExisting = false
+): Promise<TeacherRosterAssignment[]> {
+  const dirPath = `schools/${SCHOOL_ID}/config/rosterDirectory`;
+  let existingIds: string[] = [];
+  try {
+    const dirSnap = await getDoc(doc(db, dirPath));
+    if (dirSnap.exists() && Array.isArray(dirSnap.data()?.rosterIds)) {
+      existingIds = dirSnap.data()!.rosterIds.map(String).filter(Boolean);
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, dirPath);
+  }
+
+  const ops: Array<(batch: ReturnType<typeof writeBatch>) => void> = [];
+  const nextIdSet = new Set<string>(replaceExisting ? [] : existingIds);
+  const incomingIds = new Set<string>();
+  const saved: TeacherRosterAssignment[] = [];
+
+  rosters.forEach((item) => {
+    const cleanEmail = clampStr(item.teacherEmail, 254).toLowerCase();
+    if (!cleanEmail) return;
+    const rosterId = emailToRosterDocId(cleanEmail);
+    incomingIds.add(rosterId);
+    nextIdSet.add(rosterId);
+
+    const grades = item.assignedGrades
+      .filter((g) => VALID_GRADES.includes(g))
+      .slice(0, 6);
+    const subjects = item.assignedSubjects
+      .map((s) => clampStr(s, 80))
+      .filter(Boolean)
+      .slice(0, 60);
+    const teacherName = clampStr(item.teacherName, 100) || cleanEmail;
+
+    saved.push({
+      rosterId,
+      teacherEmail: cleanEmail,
+      teacherName,
+      assignedGrades: grades,
+      assignedSubjects: subjects,
+    });
+
+    const ref = doc(db, `schools/${SCHOOL_ID}/teacherRosters/${rosterId}`);
+    ops.push((batch) =>
+      batch.set(ref, {
+        schoolId: SCHOOL_ID,
+        teacherEmail: cleanEmail,
+        teacherName,
+        assignedGrades: grades,
+        assignedSubjects: subjects,
+        updatedBy: uid,
+        updatedAt: serverTimestamp(),
+      })
+    );
+  });
+
+  if (replaceExisting) {
+    existingIds.forEach((oldId) => {
+      if (!incomingIds.has(oldId)) {
+        ops.push((batch) =>
+          batch.delete(doc(db, `schools/${SCHOOL_ID}/teacherRosters/${oldId}`))
+        );
+      }
+    });
+  }
+
+  const finalIds = Array.from(nextIdSet).slice(0, 500);
+  ops.push((batch) =>
+    batch.set(doc(db, dirPath), {
+      schoolId: SCHOOL_ID,
+      rosterIds: finalIds,
+      updatedBy: uid,
+      updatedAt: serverTimestamp(),
+    })
+  );
+
+  await commitOperationsInBatches(ops, `schools/${SCHOOL_ID}/teacherRosters`);
+  return saved;
+}
+
+export async function deleteTeacherRosterAssignment(
+  uid: string,
+  rosterId: string
+): Promise<void> {
+  const cleanId = sanitizeId(rosterId, 128);
+  const dirPath = `schools/${SCHOOL_ID}/config/rosterDirectory`;
+  let existingIds: string[] = [];
+  try {
+    const dirSnap = await getDoc(doc(db, dirPath));
+    if (dirSnap.exists() && Array.isArray(dirSnap.data()?.rosterIds)) {
+      existingIds = dirSnap.data()!.rosterIds.map(String).filter(Boolean);
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, dirPath);
+  }
+
+  const nextIds = existingIds.filter((id) => id !== cleanId).slice(0, 500);
+  const ops: Array<(batch: ReturnType<typeof writeBatch>) => void> = [
+    (batch) =>
+      batch.delete(doc(db, `schools/${SCHOOL_ID}/teacherRosters/${cleanId}`)),
+    (batch) =>
+      batch.set(doc(db, dirPath), {
+        schoolId: SCHOOL_ID,
+        rosterIds: nextIds,
+        updatedBy: uid,
+        updatedAt: serverTimestamp(),
+      }),
+  ];
+
+  await commitOperationsInBatches(ops, `schools/${SCHOOL_ID}/teacherRosters`);
+}
 
 export async function saveSchoolGovernance(
   uid: string,
@@ -689,6 +895,7 @@ export async function saveSchoolGovernance(
       schoolName: clampStr(gov.schoolName, 120) || 'Milford Grade School',
       lockTeacherSchedules: Boolean(gov.lockTeacherSchedules),
       lockCurriculumUploads: Boolean(gov.lockCurriculumUploads),
+      requireAssignedRoster: Boolean(gov.requireAssignedRoster),
       updatedBy: uid,
       updatedAt: serverTimestamp(),
     });

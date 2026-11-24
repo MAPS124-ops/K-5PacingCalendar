@@ -69,6 +69,9 @@
         "lockCurriculumUploads": {
           "type": "boolean"
         },
+        "requireAssignedRoster": {
+          "type": "boolean"
+        },
         "updatedBy": {
           "type": "string",
           "maxLength": 128,
@@ -80,6 +83,67 @@
         }
       },
       "required": ["schoolId", "schoolName", "lockTeacherSchedules", "lockCurriculumUploads", "updatedBy", "updatedAt"]
+    },
+    "RosterDirectory": {
+      "title": "RosterDirectory",
+      "description": "Admin-only index of teacher roster document IDs (contains no PII emails) so admins can load all teacher class assignments without collection list queries.",
+      "type": "object",
+      "properties": {
+        "schoolId": {
+          "type": "string",
+          "enum": ["milford_grade_school"]
+        },
+        "rosterIds": {
+          "type": "array"
+        },
+        "updatedBy": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["schoolId", "rosterIds", "updatedBy", "updatedAt"]
+    },
+    "TeacherRosterAssignment": {
+      "title": "TeacherRosterAssignment",
+      "description": "Maps a teacher's verified email to the specific K-5 grades and subject blocks they teach from Skyward OneRoster or admin setup.",
+      "type": "object",
+      "properties": {
+        "schoolId": {
+          "type": "string",
+          "enum": ["milford_grade_school"]
+        },
+        "teacherEmail": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 254
+        },
+        "teacherName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "assignedGrades": {
+          "type": "array"
+        },
+        "assignedSubjects": {
+          "type": "array"
+        },
+        "updatedBy": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["schoolId", "teacherEmail", "teacherName", "assignedGrades", "assignedSubjects", "updatedBy", "updatedAt"]
     },
     "MasterScheduleBlock": {
       "title": "MasterScheduleBlock",
@@ -476,7 +540,15 @@
     },
     "/schools/{schoolId}/config/governance": {
       "schema": { "$ref": "#/entities/SchoolGovernance" },
-      "description": "School-wide administrative lock flags controlling teacher schedule and curriculum upload permissions."
+      "description": "School-wide administrative lock flags controlling teacher schedule, curriculum upload, and roster assignment scoping permissions."
+    },
+    "/schools/{schoolId}/config/rosterDirectory": {
+      "schema": { "$ref": "#/entities/RosterDirectory" },
+      "description": "Admin-only directory of teacher roster IDs for managing class assignments."
+    },
+    "/schools/{schoolId}/teacherRosters/{rosterId}": {
+      "schema": { "$ref": "#/entities/TeacherRosterAssignment" },
+      "description": "Per-teacher grade and class assignment document readable only by that verified teacher or a school admin."
     },
     "/schools/{schoolId}/schedules/{scheduleDocId}": {
       "schema": { "$ref": "#/entities/MasterScheduleBlock" },
